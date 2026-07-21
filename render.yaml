@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: anime-index
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 60
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.4
+      - key: BOT_TOKEN
+        sync: false
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      - key: WEBAPP_URL
+        value: https://anime-index.onrender.com
+      - key: LOG_CHANNEL_ID
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_PATH
+        value: database/anime_index.db
+
+# Render's free plan has an ephemeral filesystem — the SQLite file is wiped
+# on every deploy/restart. Attach a persistent disk (Render dashboard ->
+# service -> Disks) mounted at /opt/render/project/src/database and point
+# DATABASE_PATH at a file inside it once you're past prototyping, or swap
+# database/database.py for a hosted Postgres instance.
+
+# --- Alternative: deploy the Dockerfile instead of Render's native Python build ---
+# services:
+#   - type: web
+#     name: anime-index
+#     runtime: docker
+#     dockerfilePath: ./Dockerfile
+#     envVars:
+#       - key: PORT
+#         value: 8000
