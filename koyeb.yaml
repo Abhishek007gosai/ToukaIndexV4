@@ -17,7 +17,8 @@
 #     --env LOG_CHANNEL_ID=@log-channel-id \
 #     --env ADMIN_IDS=@admin-ids \
 #     --env SECRET_KEY=@secret-key \
-#     --env DATABASE_PATH=database/anime_index.db
+#     --env MONGODB_URL=@mongodb-url \
+#     --env MONGODB_NAME=anime_index
 #
 # (The @name values are Koyeb Secrets — create them first with
 # `koyeb secret create <name>`. Run `koyeb deploy --help` to confirm the
@@ -36,15 +37,15 @@ port: 8000
 route: /
 
 env:
-  - BOT_TOKEN          # from @BotFather
-  - WEBHOOK_SECRET      # any random string
-  - WEBAPP_URL          # e.g. https://anime-index-<org>.koyeb.app
+  - BOT_TOKEN            # from @BotFather
+  - WEBHOOK_SECRET       # any random string
+  - WEBAPP_URL           # e.g. https://anime-index-<org>.koyeb.app
   - LOG_CHANNEL_ID       # channel the bot posts requests/reports to
   - ADMIN_IDS            # comma-separated Telegram user IDs
   - SECRET_KEY
-  - DATABASE_PATH: database/anime_index.db
+  - MONGODB_URL          # connection string, e.g. from MongoDB Atlas
+  - MONGODB_NAME: anime_index
 
-# Note on storage: like most PaaS platforms, Koyeb instances have an
-# ephemeral filesystem — the SQLite file resets on redeploy. Fine for
-# getting started; move to a managed Postgres database before you rely on
-# the catalog/requests/reports surviving deploys long-term.
+# Storage lives in MongoDB, not on Koyeb's own disk — a hosted option like
+# MongoDB Atlas's free tier works well and survives redeploys, unlike
+# Koyeb's ephemeral instance filesystem.
