@@ -7,6 +7,18 @@ services:
       - .env
     environment:
       - PORT=8000
-    volumes:
-      - ./database:/app/database
+      - MONGODB_URL=mongodb://mongo:27017
+    depends_on:
+      - mongo
     restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
