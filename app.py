@@ -90,6 +90,12 @@ def _webapp_button(label: str = None) -> InlineKeyboardButton:
 
 # --- Commands -----------------------------------------------------------
 
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """/start no longer shows the welcome card — it just exists so joining
+    the bot doesn't feel broken. Use /anidex for the actual start menu."""
+    return
+
+
 async def cmd_anidex(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     text = (
@@ -100,11 +106,7 @@ async def cmd_anidex(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"request anime that isn't available yet.\n\n"
         f"_Your all-in-one anime station._"
     )
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("\u2022 ABOUT", callback_data="about"),
-         InlineKeyboardButton("HELP \u2022", callback_data="help")],
-        [_webapp_button()],
-    ])
+    keyboard = InlineKeyboardMarkup([[_webapp_button()]])
     if Config.BANNER_IMAGE_URL:
         await update.message.reply_photo(Config.BANNER_IMAGE_URL, caption=text,
                                           reply_markup=keyboard, parse_mode="Markdown")
@@ -121,13 +123,20 @@ async def cmd_addpost(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Usage: /addpost <anime name>\nExample: /addpost one piece")
         return
 
-    sid = new_session(kind="addpost", query=query)
-    keyboard = InlineKeyboardMarkup([
-        [InlineKeyboardButton("AniList", callback_data=f"src:{sid}:anilist"),
-         InlineKeyboardButton("MyAnimeList", callback_data=f"src:{sid}:myanimelist")],
-        [InlineKeyboardButton("Cancel", callback_data=f"cancel:{sid}")],
-    ])
-    await update.message.reply_text(f"Select source for: {query}", reply_markup=keyboard)
+    sid = new_session(kind="addpost", query=query, source="anilist")
+    src = SOURCES["anilist"]
+    try:
+        data = await asyncio.to_thread(src.search, query, 1)
+    except Exception:
+        await update.message.reply_text("Couldn't reach AniList right now. Try again shortly.")
+        return
+    sess = SESSIONS[sid]
+    sess.update(page=1, results=data["results"], has_next=data["has_next"])
+    if not data["results"]:
+        await update.message.reply_text(f"No results found on AniList for '{query}'.")
+        SESSIONS.pop(sid, None)
+        return
+    await send_results(update.message, sid)
 
 
 async def cmd_delpost(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -166,20 +175,6 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     parts = data.split(":")
     action = parts[0]
 
-    if action == "about":
-        await q.answer()
-        await q.message.reply_text(
-            f"{Config.BRAND_NAME} lets you discover trending anime, search a growing "
-            f"library, and request titles that aren't posted yet."
-        )
-        return
-    if action == "help":
-        await q.answer()
-        await q.message.reply_text(
-            "/anidex - open the start menu\n"
-            "Tap \U0001f4d6 Open " + Config.BRAND_NAME + " to browse, search, and request anime."
-        )
-        return
     if action == "noop":
         await q.answer()
         return
@@ -189,11 +184,6 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         SESSIONS.pop(sid, None)
         await q.answer("Cancelled")
         await q.edit_message_text("Cancelled.")
-        return
-
-    if action == "src":
-        _, sid, source = parts
-        await handle_src(q, sid, source)
         return
 
     if action == "page":
@@ -219,22 +209,6 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
 
 
-async def handle_src(q, sid, source):
-    session = SESSIONS.get(sid)
-    if not session:
-        await q.answer("Session expired — run /addpost again.", show_alert=True)
-        return
-    await q.answer()
-    src = SOURCES[source]
-    try:
-        data = await asyncio.to_thread(src.search, session["query"], 1)
-    except Exception:
-        await q.edit_message_text("Couldn't reach that source right now. Try again shortly.")
-        return
-    session.update(source=source, page=1, results=data["results"], has_next=data["has_next"])
-    await render_results(q, sid)
-
-
 async def handle_page(q, sid, page):
     session = SESSIONS.get(sid)
     if not session:
@@ -247,22 +221,17 @@ async def handle_page(q, sid, page):
     await render_results(q, sid)
 
 
-async def render_results(q, sid):
-    session = SESSIONS[sid]
-    results = session["results"]
-    if not results:
-        await q.edit_message_text(
-            f"No results found on {session['source'].upper()} for '{session['query']}'.",
-        )
-        SESSIONS.pop(sid, None)
-        return
+def _results_text(session):
+    return "Search Results (ANILIST)\nSelect the correct title from the list below:"
 
+
+def _results_keyboard(sid, session):
     rows = [
         [InlineKeyboardButton(
             f"{r['title']}" + (f" ({r['year']})" if r.get("year") else ""),
             callback_data=f"pick:{sid}:{i}",
         )]
-        for i, r in enumerate(results)
+        for i, r in enumerate(session["results"])
     ]
     nav = []
     if session["page"] > 1:
@@ -272,12 +241,23 @@ async def render_results(q, sid):
         nav.append(InlineKeyboardButton("Next \u27a1", callback_data=f"page:{sid}:{session['page'] + 1}"))
     rows.append(nav)
     rows.append([InlineKeyboardButton("Cancel", callback_data=f"cancel:{sid}")])
+    return InlineKeyboardMarkup(rows)
 
-    text = (
-        f"Search Results ({session['source'].upper()})\n"
-        f"Select the correct title from the list below:"
-    )
-    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(rows))
+
+async def send_results(message, sid):
+    """Initial results message, sent as a fresh reply from cmd_addpost."""
+    session = SESSIONS[sid]
+    await message.reply_text(_results_text(session), reply_markup=_results_keyboard(sid, session))
+
+
+async def render_results(q, sid):
+    """Same results view, but editing an existing message (Next/Prev)."""
+    session = SESSIONS[sid]
+    if not session["results"]:
+        await q.edit_message_text(f"No results found on AniList for '{session['query']}'.")
+        SESSIONS.pop(sid, None)
+        return
+    await q.edit_message_text(_results_text(session), reply_markup=_results_keyboard(sid, session))
 
 
 async def handle_pick(q, update, sid, idx):
@@ -294,16 +274,19 @@ async def handle_pick(q, update, sid, idx):
         await q.edit_message_text("Couldn't fetch full details for that title. Try again.")
         return
 
-    anime_id = db.upsert_anime(details, added_by=update.effective_user.id)
+    db.upsert_anime(details, added_by=update.effective_user.id)
     SESSIONS.pop(sid, None)
 
-    text = (
+    await q.edit_message_text(
         f"\u2705 Post created: {details['title']}\n\n"
-        f"It's live on {Config.BRAND_NAME} now, listed under Request Anime until you "
-        f"add a join link. Open the post in the mini app and tap the edit (\u270e) "
-        f"button to paste the channel link when it's ready."
+        f"It's live under Available on {Config.BRAND_NAME} now.",
+        reply_markup=InlineKeyboardMarkup([[_webapp_button()]]),
     )
-    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[_webapp_button()]]))
+    # Separate follow-up message, as its own bubble, prompting the join link.
+    await q.message.reply_text(
+        f"\U0001f4ce Now set a join link for {details['title']} — open the mini app, "
+        f"tap the post, then tap \u2795 next to Join/Request to add it."
+    )
 
 
 async def handle_delpick(q, sid, idx):
@@ -548,7 +531,8 @@ def build_bot_app() -> Application | None:
     if not Config.BOT_TOKEN:
         return None
     application = Application.builder().token(Config.BOT_TOKEN).build()
-    application.add_handler(CommandHandler(["start", "anidex"], cmd_anidex))
+    application.add_handler(CommandHandler("start", cmd_start))
+    application.add_handler(CommandHandler("anidex", cmd_anidex))
     application.add_handler(CommandHandler("addpost", cmd_addpost))
     application.add_handler(CommandHandler("delpost", cmd_delpost))
     application.add_handler(CallbackQueryHandler(on_callback))
