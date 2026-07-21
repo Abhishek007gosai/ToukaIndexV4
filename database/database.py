@@ -1,95 +1,57 @@
 """
-Tiny synchronous SQLite data layer for Anime Index.
+MongoDB data layer for Anime Index.
 
-No ORM on purpose — the schema is small enough that plain sqlite3 keeps
-this easy to read and easy to deploy (a single file database, no extra
-service to run on Render/Koyeb). Every function opens and closes its own
-connection, which is safe across threads and keeps things simple for a
-low-traffic bot + mini app.
+IDs are kept as small sequential integers (via a `counters` collection)
+rather than raw Mongo ObjectIds — Flask's route converters (e.g.
+<int:anime_id>) and the bot's callback_data parsing (e.g. "req:{id}:accept")
+both expect plain integers, and this keeps that working unchanged.
+
+Every function here mirrors the shape app.py already expects: dicts with
+plain keys (anime "id", not "_id"), lists for genres, etc.
 """
 
-import json
-import os
-import sqlite3
 import time
-from contextlib import contextmanager
+
+from pymongo import ASCENDING, MongoClient
 
 from config import Config
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS anime (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    source TEXT NOT NULL,
-    source_id TEXT NOT NULL,
-    title TEXT NOT NULL,
-    year INTEGER,
-    poster_url TEXT,
-    banner_url TEXT,
-    description TEXT,
-    genres TEXT NOT NULL DEFAULT '[]',
-    rating REAL,
-    join_link TEXT,
-    added_by INTEGER,
-    created_at REAL NOT NULL,
-    updated_at REAL NOT NULL,
-    UNIQUE(source, source_id)
-);
+_client = MongoClient(Config.MONGODB_URL)
+_db = _client[Config.MONGODB_NAME]
 
-CREATE TABLE IF NOT EXISTS users (
-    telegram_id INTEGER PRIMARY KEY,
-    username TEXT,
-    first_name TEXT,
-    role TEXT NOT NULL DEFAULT 'member',
-    access TEXT NOT NULL DEFAULT 'active',
-    registered_at REAL NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS requests (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    anime_title TEXT NOT NULL,
-    requested_by INTEGER,
-    requested_by_name TEXT,
-    status TEXT NOT NULL DEFAULT 'pending',
-    created_at REAL NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS reports (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    anime_id INTEGER,
-    anime_title TEXT,
-    reason TEXT NOT NULL,
-    details TEXT,
-    reported_by INTEGER,
-    reported_by_name TEXT,
-    created_at REAL NOT NULL
-);
-"""
-
-
-@contextmanager
-def get_conn():
-    os.makedirs(os.path.dirname(Config.DATABASE_PATH) or ".", exist_ok=True)
-    conn = sqlite3.connect(Config.DATABASE_PATH)
-    conn.row_factory = sqlite3.Row
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
+anime_col = _db["anime"]
+users_col = _db["users"]
+requests_col = _db["requests"]
+reports_col = _db["reports"]
+counters_col = _db["counters"]
 
 
 def init_db():
-    with get_conn() as conn:
-        conn.executescript(SCHEMA)
+    anime_col.create_index([("source", ASCENDING), ("source_id", ASCENDING)], unique=True)
+    anime_col.create_index([("title", ASCENDING)])
+    requests_col.create_index([("status", ASCENDING)])
+
+
+def _next_id(counter_name: str) -> int:
+    doc = counters_col.find_one_and_update(
+        {"_id": counter_name},
+        {"$inc": {"seq": 1}},
+        upsert=True,
+        return_document=True,
+    )
+    return doc["seq"]
 
 
 # ---------------------------------------------------------------------------
 # Anime catalog
 # ---------------------------------------------------------------------------
 
-def _row_to_anime(row: sqlite3.Row) -> dict:
-    d = dict(row)
-    d["genres"] = json.loads(d.get("genres") or "[]")
+def _to_anime(doc) -> dict | None:
+    if not doc:
+        return None
+    d = dict(doc)
+    d["id"] = d.pop("_id")
+    d["genres"] = d.get("genres") or []
     d["available"] = bool(d.get("join_link"))
     return d
 
@@ -98,76 +60,73 @@ def upsert_anime(details: dict, added_by: int | None = None) -> int:
     """Insert a new catalog entry from a normalized source dict, or update
     the existing one if this (source, source_id) was already posted."""
     now = time.time()
-    with get_conn() as conn:
-        cur = conn.execute(
-            "SELECT id FROM anime WHERE source = ? AND source_id = ?",
-            (details["source"], str(details["source_id"])),
-        )
-        existing = cur.fetchone()
-        if existing:
-            conn.execute(
-                """UPDATE anime SET title=?, year=?, poster_url=?, banner_url=?,
-                       description=?, genres=?, rating=?, updated_at=?
-                   WHERE id=?""",
-                (
-                    details["title"], details.get("year"), details.get("poster_url"),
-                    details.get("banner_url"), details.get("description"),
-                    json.dumps(details.get("genres", [])), details.get("rating"),
-                    now, existing["id"],
-                ),
-            )
-            return existing["id"]
+    existing = anime_col.find_one({"source": details["source"], "source_id": str(details["source_id"])})
 
-        cur = conn.execute(
-            """INSERT INTO anime
-                   (source, source_id, title, year, poster_url, banner_url,
-                    description, genres, rating, join_link, added_by, created_at, updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                details["source"], str(details["source_id"]), details["title"],
-                details.get("year"), details.get("poster_url"), details.get("banner_url"),
-                details.get("description"), json.dumps(details.get("genres", [])),
-                details.get("rating"), None, added_by, now, now,
-            ),
+    if existing:
+        anime_col.update_one(
+            {"_id": existing["_id"]},
+            {"$set": {
+                "title": details["title"],
+                "year": details.get("year"),
+                "poster_url": details.get("poster_url"),
+                "banner_url": details.get("banner_url"),
+                "description": details.get("description"),
+                "genres": details.get("genres", []),
+                "rating": details.get("rating"),
+                "updated_at": now,
+            }},
         )
-        return cur.lastrowid
+        return existing["_id"]
+
+    new_id = _next_id("anime")
+    anime_col.insert_one({
+        "_id": new_id,
+        "source": details["source"],
+        "source_id": str(details["source_id"]),
+        "title": details["title"],
+        "year": details.get("year"),
+        "poster_url": details.get("poster_url"),
+        "banner_url": details.get("banner_url"),
+        "description": details.get("description"),
+        "genres": details.get("genres", []),
+        "rating": details.get("rating"),
+        "join_link": None,
+        "added_by": added_by,
+        "created_at": now,
+        "updated_at": now,
+    })
+    return new_id
 
 
 def delete_anime(anime_id: int):
-    with get_conn() as conn:
-        conn.execute("DELETE FROM anime WHERE id = ?", (anime_id,))
+    anime_col.delete_one({"_id": anime_id})
 
 
 def get_anime(anime_id: int) -> dict | None:
-    with get_conn() as conn:
-        row = conn.execute("SELECT * FROM anime WHERE id = ?", (anime_id,)).fetchone()
-        return _row_to_anime(row) if row else None
+    return _to_anime(anime_col.find_one({"_id": anime_id}))
 
 
 def list_available() -> list[dict]:
-    """Only posts that currently have a join link set."""
-    with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM anime WHERE join_link IS NOT NULL AND join_link != '' ORDER BY title COLLATE NOCASE"
-        ).fetchall()
-        return [_row_to_anime(r) for r in rows]
+    """Every post in the local library — a post appears here as soon as
+    /addpost creates it, whether or not a join link has been set yet."""
+    docs = anime_col.find().collation({"locale": "en", "strength": 2}).sort("title", ASCENDING)
+    return [_to_anime(d) for d in docs]
 
 
 def search_local(query: str) -> list[dict]:
-    with get_conn() as conn:
-        rows = conn.execute(
-            "SELECT * FROM anime WHERE title LIKE ? ORDER BY title COLLATE NOCASE",
-            (f"%{query}%",),
-        ).fetchall()
-        return [_row_to_anime(r) for r in rows]
+    docs = (
+        anime_col.find({"title": {"$regex": query, "$options": "i"}})
+        .collation({"locale": "en", "strength": 2})
+        .sort("title", ASCENDING)
+    )
+    return [_to_anime(d) for d in docs]
 
 
 def update_link(anime_id: int, link: str):
-    with get_conn() as conn:
-        conn.execute(
-            "UPDATE anime SET join_link = ?, updated_at = ? WHERE id = ?",
-            (link or None, time.time(), anime_id),
-        )
+    anime_col.update_one(
+        {"_id": anime_id},
+        {"$set": {"join_link": link or None, "updated_at": time.time()}},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -176,29 +135,26 @@ def update_link(anime_id: int, link: str):
 
 def get_or_create_user(telegram_id: int, username: str | None, first_name: str | None,
                         is_admin: bool) -> dict:
-    with get_conn() as conn:
-        row = conn.execute("SELECT * FROM users WHERE telegram_id = ?", (telegram_id,)).fetchone()
-        role = "admin" if is_admin else "member"
-        if row:
-            conn.execute(
-                "UPDATE users SET username=?, first_name=?, role=? WHERE telegram_id=?",
-                (username, first_name, role, telegram_id),
-            )
-            data = dict(row)
-            data["username"] = username
-            data["first_name"] = first_name
-            data["role"] = role
-            return data
+    role = "admin" if is_admin else "member"
+    existing = users_col.find_one({"_id": telegram_id})
 
-        now = time.time()
-        conn.execute(
-            "INSERT INTO users (telegram_id, username, first_name, role, access, registered_at) VALUES (?,?,?,?,?,?)",
-            (telegram_id, username, first_name, role, "active", now),
+    if existing:
+        users_col.update_one(
+            {"_id": telegram_id},
+            {"$set": {"username": username, "first_name": first_name, "role": role}},
         )
-        return {
-            "telegram_id": telegram_id, "username": username, "first_name": first_name,
-            "role": role, "access": "active", "registered_at": now,
-        }
+        existing.update(username=username, first_name=first_name, role=role)
+        existing["telegram_id"] = existing.pop("_id")
+        return existing
+
+    now = time.time()
+    doc = {
+        "_id": telegram_id, "username": username, "first_name": first_name,
+        "role": role, "access": "active", "registered_at": now,
+    }
+    users_col.insert_one(dict(doc))
+    doc["telegram_id"] = doc.pop("_id")
+    return doc
 
 
 # ---------------------------------------------------------------------------
@@ -206,23 +162,29 @@ def get_or_create_user(telegram_id: int, username: str | None, first_name: str |
 # ---------------------------------------------------------------------------
 
 def create_request(anime_title: str, requested_by: int | None, requested_by_name: str | None) -> int:
-    with get_conn() as conn:
-        cur = conn.execute(
-            "INSERT INTO requests (anime_title, requested_by, requested_by_name, status, created_at) VALUES (?,?,?,?,?)",
-            (anime_title, requested_by, requested_by_name, "pending", time.time()),
-        )
-        return cur.lastrowid
+    new_id = _next_id("requests")
+    requests_col.insert_one({
+        "_id": new_id,
+        "anime_title": anime_title,
+        "requested_by": requested_by,
+        "requested_by_name": requested_by_name,
+        "status": "pending",
+        "created_at": time.time(),
+    })
+    return new_id
 
 
 def get_request(request_id: int) -> dict | None:
-    with get_conn() as conn:
-        row = conn.execute("SELECT * FROM requests WHERE id = ?", (request_id,)).fetchone()
-        return dict(row) if row else None
+    doc = requests_col.find_one({"_id": request_id})
+    if not doc:
+        return None
+    d = dict(doc)
+    d["id"] = d.pop("_id")
+    return d
 
 
 def update_request_status(request_id: int, status: str):
-    with get_conn() as conn:
-        conn.execute("UPDATE requests SET status = ? WHERE id = ?", (status, request_id))
+    requests_col.update_one({"_id": request_id}, {"$set": {"status": status}})
 
 
 # ---------------------------------------------------------------------------
@@ -231,11 +193,15 @@ def update_request_status(request_id: int, status: str):
 
 def create_report(anime_id: int | None, anime_title: str, reason: str, details: str,
                    reported_by: int | None, reported_by_name: str | None) -> int:
-    with get_conn() as conn:
-        cur = conn.execute(
-            """INSERT INTO reports
-                   (anime_id, anime_title, reason, details, reported_by, reported_by_name, created_at)
-               VALUES (?,?,?,?,?,?,?)""",
-            (anime_id, anime_title, reason, details, reported_by, reported_by_name, time.time()),
-        )
-        return cur.lastrowid
+    new_id = _next_id("reports")
+    reports_col.insert_one({
+        "_id": new_id,
+        "anime_id": anime_id,
+        "anime_title": anime_title,
+        "reason": reason,
+        "details": details,
+        "reported_by": reported_by,
+        "reported_by_name": reported_by_name,
+        "created_at": time.time(),
+    })
+    return new_id
