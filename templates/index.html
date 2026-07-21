@@ -28,8 +28,16 @@
         <span class="search-icon">&#128269;</span>
       </div>
 
-      <!-- All tab -->
-      <div id="tab-all">
+      <!-- Available tab -->
+      <div id="tab-available">
+        <h2 class="section-header"><span class="accent-bar"></span>Available Anime</h2>
+        <div id="letter-bar" class="letter-bar"></div>
+        <div id="available-groups"></div>
+        <p id="available-empty" class="empty-note hidden">No anime found.</p>
+      </div>
+
+      <!-- News tab -->
+      <div id="tab-news" class="hidden">
         <section>
           <h2 class="section-header"><span class="accent-bar"></span>Trending Now</h2>
           <div id="trending-row" class="hscroll"></div>
@@ -40,19 +48,11 @@
         </section>
       </div>
 
-      <!-- Available tab -->
-      <div id="tab-available" class="hidden">
-        <h2 class="section-header"><span class="accent-bar"></span>Available Anime</h2>
-        <div id="letter-bar" class="letter-bar"></div>
-        <div id="available-groups"></div>
-        <p id="available-empty" class="empty-note hidden">No anime found.</p>
-      </div>
-
     </div>
 
     <nav class="tab-bar">
-      <button class="tab-btn active" data-tab="all">All</button>
-      <button class="tab-btn" data-tab="available">Available</button>
+      <button class="tab-btn active" data-tab="available">Available</button>
+      <button class="tab-btn" data-tab="news">News</button>
     </nav>
   </main>
 
@@ -82,6 +82,21 @@
         <div id="detail-action-area"></div>
 
         <button id="report-open-btn" class="btn btn-outline">&#128681; Report an issue</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== Set Join Link sheet (admin only) ===================== -->
+  <div id="link-overlay" class="overlay hidden">
+    <div class="sheet">
+      <div class="sheet-body">
+        <h3 class="sheet-title">Set Join Link</h3>
+        <input id="link-input" class="edit-link-input link-input-full" type="text"
+               placeholder="Channel ID, @username, or URL" autocomplete="off" />
+        <div class="btn-row">
+          <button id="link-cancel" class="btn btn-secondary">Cancel</button>
+          <button id="link-save" class="btn btn-primary">Save</button>
+        </div>
       </div>
     </div>
   </div>
