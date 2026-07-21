@@ -23,11 +23,11 @@ class Config:
     BRAND_NAME = os.environ.get("BRAND_NAME", "Anime Index")
     BRAND_HANDLE = os.environ.get("BRAND_HANDLE", "ANIME_INDEX")
     # Optional banner image shown above the /anidex welcome message
-    BANNER_IMAGE_URL = os.environ.get("BANNER_IMAGE_URL", "")
+    BANNER_IMAGE_URL = os.environ.get("BANNER_IMAGE_URL", "https://litter.catbox.moe/bxry4e.jpg")
 
     # --- Telegram bot ---
     BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
-    WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "change-me")
+    WEBHOOK_SECRET = os.environ.get("WEBHOOK_SECRET", "")
     # Public HTTPS base URL of this deployment, e.g. https://anime-index.onrender.com
     WEBAPP_URL = os.environ.get("WEBAPP_URL", "").rstrip("/")
     # Channel/group the bot posts request + report notifications to (e.g. -1001234567890)
