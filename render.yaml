@@ -20,14 +20,14 @@ services:
         sync: false
       - key: SECRET_KEY
         generateValue: true
-      - key: DATABASE_PATH
-        value: database/anime_index.db
+      - key: MONGODB_URL
+        sync: false
+      - key: MONGODB_NAME
+        value: anime_index
 
-# Render's free plan has an ephemeral filesystem — the SQLite file is wiped
-# on every deploy/restart. Attach a persistent disk (Render dashboard ->
-# service -> Disks) mounted at /opt/render/project/src/database and point
-# DATABASE_PATH at a file inside it once you're past prototyping, or swap
-# database/database.py for a hosted Postgres instance.
+# Storage lives in MongoDB (Atlas free tier works well), not on Render's
+# own disk, so nothing here needs a persistent disk. Set MONGODB_URL in
+# the dashboard to your Atlas (or other hosted Mongo) connection string.
 
 # --- Alternative: deploy the Dockerfile instead of Render's native Python build ---
 # services:
