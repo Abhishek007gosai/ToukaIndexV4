@@ -18,7 +18,7 @@ html, body {
   height: 100%;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: "JetBrains Mono", "Space Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -162,8 +162,8 @@ html, body {
   flex: none;
 }
 
-.hscroll .poster-card { width: 128px; height: 176px; }
-.grid-2 .poster-card { width: 100%; height: 208px; }
+.hscroll .poster-card { width: 128px; height: 192px; }
+.grid-2 .poster-card { width: 100%; height: 232px; }
 
 .poster-card img {
   width: 100%;
@@ -257,6 +257,10 @@ html, body {
   border-top: 1px solid var(--border);
   padding: 10px 12px;
   flex: none;
+  position: sticky;
+  bottom: 0;
+  background: var(--bg);
+  z-index: 20;
 }
 
 .tab-btn {
@@ -383,7 +387,7 @@ html, body {
 .sheet-media {
   position: relative;
   width: 100%;
-  height: 220px;
+  height: 260px;
   background: #151515;
 }
 
@@ -434,7 +438,11 @@ html, body {
   font-size: 13.5px;
   line-height: 1.55;
   margin: 0 0 18px;
+  max-height: 130px;
+  overflow-y: auto;
+  scrollbar-width: none;
 }
+.sheet-description::-webkit-scrollbar { display: none; }
 
 .btn {
   width: 100%;
@@ -466,31 +474,41 @@ html, body {
 .btn-row { display: flex; gap: 10px; }
 .btn-row .btn { margin-bottom: 0; }
 
-.edit-link-row {
+.action-row {
   display: flex;
-  gap: 8px;
+  gap: 10px;
   margin-bottom: 10px;
 }
 
+.action-row .btn { margin-bottom: 0; flex: 1; }
+
+.plus-btn {
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
 .edit-link-input {
-  flex: 1;
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 10px;
   padding: 10px 12px;
   color: var(--text);
   font-size: 13px;
+  font-family: inherit;
 }
 
-.edit-link-toggle {
-  background: none;
-  border: none;
-  color: var(--text-faint);
-  font-size: 12px;
-  cursor: pointer;
-  padding: 0 0 10px;
-  text-align: left;
-}
+.link-input-full { width: 100%; margin-bottom: 16px; padding: 12px 14px; }
 
 /* ---------------- report sheet ---------------- */
 
