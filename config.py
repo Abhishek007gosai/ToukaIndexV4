@@ -40,12 +40,13 @@ class Config:
     PORT = int(os.environ.get("PORT", 8000))
     DEBUG = os.environ.get("DEBUG", "false").lower() == "true"
 
-    # --- Database ---
-    DATABASE_PATH = os.environ.get("DATABASE_PATH", os.path.join("database", "anime_index.db"))
+    # --- Database (MongoDB) ---
+    # Full connection string, e.g. mongodb+srv://user:pass@cluster.mongodb.net
+    MONGODB_URL = os.environ.get("MONGODB_URL", "mongodb://localhost:27017")
+    MONGODB_NAME = os.environ.get("MONGODB_NAME", "anime_index")
 
     # --- External metadata sources ---
     ANILIST_ENDPOINT = "https://graphql.anilist.co"
-    JIKAN_ENDPOINT = "https://api.jikan.moe/v4"
 
     # How long (seconds) trending/popular results are cached in memory
     # before being re-fetched from AniList.
