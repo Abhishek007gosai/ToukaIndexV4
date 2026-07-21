@@ -47,8 +47,8 @@
   const letterBar = el("letter-bar");
   const availableGroups = el("available-groups");
   const availableEmpty = el("available-empty");
-  const tabAll = el("tab-all");
   const tabAvailable = el("tab-available");
+  const tabNews = el("tab-news");
   const tabBtns = document.querySelectorAll(".tab-btn");
 
   const detailOverlay = el("detail-overlay");
@@ -57,6 +57,9 @@
   const detailGenres = el("detail-genres");
   const detailDescription = el("detail-description");
   const detailActionArea = el("detail-action-area");
+
+  const linkOverlay = el("link-overlay");
+  const linkInput = el("link-input");
 
   const reportOverlay = el("report-overlay");
   const reportDetails = el("report-details");
@@ -86,7 +89,7 @@
   let available = [];
   let activeLetter = null;
   let query = "";
-  let profile = null; // filled in lazily when the profile screen is opened
+  let profile = null; // filled in lazily / preloaded for admin checks
 
   const ALL_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ".split("");
 
@@ -126,9 +129,9 @@
   }
 
   // ---------------------------------------------------------------------
-  // Render: All tab
+  // Render: News tab (Trending + Popular, discovery only — no local id)
   // ---------------------------------------------------------------------
-  function renderAllTab() {
+  function renderNewsTab() {
     trendingRow.innerHTML = "";
     trending.filter((a) => matchesQuery(a.title)).forEach((item) => {
       trendingRow.appendChild(posterCard(item, () => openDiscoverDetail(item)));
@@ -141,7 +144,7 @@
   }
 
   // ---------------------------------------------------------------------
-  // Render: Available tab
+  // Render: Available tab (everything posted via /addpost)
   // ---------------------------------------------------------------------
   function lettersWithData() {
     return new Set(available.map((a) => (a.title[0] || "").toUpperCase()));
@@ -212,8 +215,8 @@
   // ---------------------------------------------------------------------
   function setTab(tab) {
     tabBtns.forEach((b) => b.classList.toggle("active", b.dataset.tab === tab));
-    tabAll.classList.toggle("hidden", tab !== "all");
     tabAvailable.classList.toggle("hidden", tab !== "available");
+    tabNews.classList.toggle("hidden", tab !== "news");
     if (tab === "available") renderAvailableTab();
   }
   tabBtns.forEach((b) => b.addEventListener("click", () => setTab(b.dataset.tab)));
@@ -221,7 +224,7 @@
   searchInput.addEventListener("input", (e) => {
     query = e.target.value;
     if (query) activeLetter = null;
-    renderAllTab();
+    renderNewsTab();
     if (!tabAvailable.classList.contains("hidden")) renderAvailableTab();
   });
 
@@ -229,12 +232,15 @@
   // Detail sheet
   // ---------------------------------------------------------------------
   let currentDetail = null; // the anime currently shown in the sheet
+  let currentContext = null; // "available" | "news"
 
-  function openDetailSheet(anime) {
+  function openDetailSheet(anime, context) {
     currentDetail = anime;
+    currentContext = context;
     detailPoster.src = anime.banner_url || anime.poster_url || "";
     detailTitle.textContent = anime.title;
     detailDescription.textContent = anime.description || "No synopsis available.";
+    detailDescription.scrollTop = 0;
 
     detailGenres.innerHTML = "";
     (anime.genres || []).forEach((g) => {
@@ -244,21 +250,29 @@
       detailGenres.appendChild(pill);
     });
 
-    renderDetailAction(anime);
+    renderDetailAction(anime, context);
     detailOverlay.classList.remove("hidden");
   }
 
   function closeDetailSheet() {
     detailOverlay.classList.add("hidden");
     currentDetail = null;
+    currentContext = null;
   }
   el("detail-close").addEventListener("click", closeDetailSheet);
   detailOverlay.addEventListener("click", (e) => {
     if (e.target === detailOverlay) closeDetailSheet();
   });
 
-  function renderDetailAction(anime) {
+  function renderDetailAction(anime, context) {
     detailActionArea.innerHTML = "";
+
+    // News tab items are pure discovery (not tied to a local post) — no
+    // Join / Request action, just the info + Report an issue.
+    if (context === "news") return;
+
+    const row = document.createElement("div");
+    row.className = "action-row";
 
     if (anime.join_link) {
       const joinBtn = document.createElement("button");
@@ -268,70 +282,26 @@
         if (tg && tg.openLink) tg.openLink(anime.join_link);
         else window.open(anime.join_link, "_blank");
       });
-      detailActionArea.appendChild(joinBtn);
+      row.appendChild(joinBtn);
     } else {
       const reqBtn = document.createElement("button");
       reqBtn.className = "btn btn-primary";
       reqBtn.textContent = "Request Anime";
       reqBtn.addEventListener("click", () => submitRequest(anime.title, reqBtn));
-      detailActionArea.appendChild(reqBtn);
+      row.appendChild(reqBtn);
     }
 
-    // Admin-only inline link editor, only for posts that already exist
-    // in the local library (anime.id set).
+    // Admin/owner-only control to set or change the join link.
     if (profile && profile.role === "admin" && anime.id) {
-      const toggle = document.createElement("button");
-      toggle.className = "edit-link-toggle";
-      toggle.textContent = "\u270e Edit link";
-      toggle.addEventListener("click", () => renderEditLinkRow(anime));
-      detailActionArea.appendChild(toggle);
+      const plus = document.createElement("button");
+      plus.className = "plus-btn";
+      plus.textContent = "+";
+      plus.setAttribute("aria-label", "Set join link");
+      plus.addEventListener("click", () => openLinkSheet(anime));
+      row.appendChild(plus);
     }
-  }
 
-  function renderEditLinkRow(anime) {
-    const existingToggle = detailActionArea.querySelector(".edit-link-toggle");
-    if (existingToggle) existingToggle.remove();
-    const existingRow = detailActionArea.querySelector(".edit-link-row");
-    if (existingRow) existingRow.remove();
-
-    const row = document.createElement("div");
-    row.className = "edit-link-row";
-    const input = document.createElement("input");
-    input.className = "edit-link-input";
-    input.type = "text";
-    input.placeholder = "https://t.me/your_channel";
-    input.value = anime.join_link || "";
-    row.appendChild(input);
     detailActionArea.appendChild(row);
-
-    const btnRow = document.createElement("div");
-    btnRow.className = "btn-row";
-    const cancelBtn = document.createElement("button");
-    cancelBtn.className = "btn btn-secondary";
-    cancelBtn.textContent = "Cancel";
-    cancelBtn.addEventListener("click", () => renderDetailAction(anime));
-
-    const saveBtn = document.createElement("button");
-    saveBtn.className = "btn btn-primary";
-    saveBtn.textContent = "Save";
-    saveBtn.addEventListener("click", async () => {
-      try {
-        await api(`/api/anime/${anime.id}/link`, {
-          method: "PATCH",
-          body: JSON.stringify({ link: input.value.trim() }),
-        });
-        anime.join_link = input.value.trim();
-        showToast("Link saved");
-        await loadAvailable();
-        renderDetailAction(anime);
-      } catch (err) {
-        showToast(err.message || "Couldn't save link");
-      }
-    });
-
-    btnRow.appendChild(cancelBtn);
-    btnRow.appendChild(saveBtn);
-    detailActionArea.appendChild(btnRow);
   }
 
   async function submitRequest(title, btn) {
@@ -351,22 +321,65 @@
   // Opens an item that already lives in the local library (Available tab —
   // full data, including description/genres, is already on the object).
   function openLocalDetail(item) {
-    openDetailSheet(item);
+    openDetailSheet(item, "available");
   }
 
   // Opens a Trending/Popular card — only lightweight data was loaded for
   // the grid, so fetch full AniList details (genres/synopsis/banner) first.
   async function openDiscoverDetail(item) {
-    openDetailSheet({ ...item, description: "Loading synopsis...", genres: [] });
+    openDetailSheet({ ...item, description: "Loading synopsis...", genres: [] }, "news");
     try {
       const full = await api(`/api/anilist/${item.anilist_id}`);
       if (currentDetail && currentDetail.title === item.title) {
-        openDetailSheet({ ...full, rating: item.rating ?? full.rating });
+        openDetailSheet({ ...full, rating: item.rating ?? full.rating }, "news");
       }
     } catch (err) {
       if (currentDetail) detailDescription.textContent = "Couldn't load full details.";
     }
   }
+
+  // ---------------------------------------------------------------------
+  // Set Join Link sheet (admin only)
+  // ---------------------------------------------------------------------
+  let linkTargetAnime = null;
+
+  function openLinkSheet(anime) {
+    linkTargetAnime = anime;
+    linkInput.value = anime.join_link || "";
+    linkOverlay.classList.remove("hidden");
+    linkInput.focus();
+  }
+
+  function closeLinkSheet() {
+    linkOverlay.classList.add("hidden");
+    linkTargetAnime = null;
+  }
+
+  el("link-cancel").addEventListener("click", closeLinkSheet);
+  linkOverlay.addEventListener("click", (e) => {
+    if (e.target === linkOverlay) closeLinkSheet();
+  });
+
+  el("link-save").addEventListener("click", async () => {
+    if (!linkTargetAnime) return;
+    const value = linkInput.value.trim();
+    try {
+      await api(`/api/anime/${linkTargetAnime.id}/link`, {
+        method: "PATCH",
+        body: JSON.stringify({ link: value }),
+      });
+      linkTargetAnime.join_link = value;
+      if (currentDetail && currentDetail.id === linkTargetAnime.id) {
+        currentDetail.join_link = value;
+        renderDetailAction(currentDetail, currentContext);
+      }
+      closeLinkSheet();
+      showToast("Link saved");
+      await loadAvailable();
+    } catch (err) {
+      showToast(err.message || "Couldn't save link");
+    }
+  });
 
   // ---------------------------------------------------------------------
   // Report sheet
@@ -461,7 +474,7 @@
   // ---------------------------------------------------------------------
   // Data loading
   // ---------------------------------------------------------------------
-  async function loadDiscover() {
+  async function loadNews() {
     try {
       [trending, popular] = await Promise.all([
         api("/api/catalog/trending"),
@@ -471,7 +484,7 @@
       trending = [];
       popular = [];
     }
-    renderAllTab();
+    renderNewsTab();
   }
 
   async function loadAvailable() {
@@ -483,8 +496,8 @@
     if (!tabAvailable.classList.contains("hidden")) renderAvailableTab();
   }
 
-  // Load a lightweight profile up front (silently) so the admin edit-link
-  // control can appear without waiting for the user to open Profile.
+  // Load profile up front (silently) so the admin "+" control can appear
+  // without waiting for the user to open the Profile screen.
   async function preloadProfile() {
     try {
       profile = await api("/api/profile");
@@ -495,6 +508,7 @@
 
   (async function init() {
     document.title = brandName;
-    await Promise.all([loadDiscover(), loadAvailable(), preloadProfile()]);
+    await Promise.all([loadNews(), loadAvailable(), preloadProfile()]);
+    renderAvailableTab();
   })();
 })();
