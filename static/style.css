@@ -210,6 +210,57 @@ html, body {
   padding: 40px 0;
 }
 
+/* ---------------- spotlight card ---------------- */
+
+.spotlight-card {
+  position: relative;
+  border-radius: 16px;
+  overflow: hidden;
+  height: 160px;
+  margin-bottom: 22px;
+  cursor: pointer;
+  background: #151515;
+}
+
+.spotlight-card img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.spotlight-badge {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  background: var(--amber);
+  color: #1a1200;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+
+.spotlight-overlay-text {
+  position: absolute;
+  left: 0; right: 0; bottom: 0;
+  padding: 30px 14px 12px;
+  background: linear-gradient(to top, rgba(0,0,0,0.92), transparent);
+}
+
+.spotlight-title {
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.35;
+  margin: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
 /* ---------------- letter bar ---------------- */
 
 .letter-bar {
@@ -363,31 +414,34 @@ html, body {
   inset: 0;
   z-index: 30;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
   justify-content: center;
-  background: rgba(0,0,0,0.7);
+  background: rgba(0,0,0,0.75);
+  padding: 24px;
 }
 
 .sheet {
   width: 100%;
-  max-width: 480px;
-  max-height: 88vh;
+  max-width: 360px;
+  max-height: 82vh;
   overflow-y: auto;
   background: var(--bg);
-  border-top: 1px solid var(--border);
-  border-radius: 24px 24px 0 0;
-  animation: slide-up 0.18s ease-out;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  animation: modal-in 0.16s ease-out;
+  scrollbar-width: none;
 }
+.sheet::-webkit-scrollbar { display: none; }
 
-@keyframes slide-up {
-  from { transform: translateY(24px); opacity: 0; }
-  to { transform: translateY(0); opacity: 1; }
+@keyframes modal-in {
+  from { transform: scale(0.94); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
 }
 
 .sheet-media {
   position: relative;
   width: 100%;
-  height: 260px;
+  height: 190px;
   background: #151515;
 }
 
