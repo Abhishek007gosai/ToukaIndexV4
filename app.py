@@ -20,6 +20,7 @@ import asyncio
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import time
 from urllib.parse import parse_qsl
@@ -30,9 +31,13 @@ from flask import Flask, abort, jsonify, render_template, request
 from config import Config
 from database import database as db
 from plugins import SOURCES
+from plugins import news as news_plugin
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update, WebAppInfo
-from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes
+from telegram.ext import (
+    Application, CallbackQueryHandler, CommandHandler, ContextTypes,
+    MessageHandler, filters,
+)
 
 # ---------------------------------------------------------------------------
 # Flask app
@@ -98,14 +103,12 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def cmd_anidex(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    text = (
-        f"HELLO {user.first_name}\n\n"
-        f"I am {Config.BRAND_NAME} bot. Use /anidex to browse, search and "
-        f"request anime.\n\n"
-        f"\U0001f4fa Browse trending anime, search for your favorites, and "
-        f"request anime that isn't available yet.\n\n"
-        f"_Your all-in-one anime station._"
-    )
+    try:
+        text = Config.START_MSG.format(first_name=user.first_name, brand_name=Config.BRAND_NAME)
+    except (KeyError, IndexError, ValueError):
+        # A malformed custom START_MSG (e.g. a stray "{" or "}") shouldn't
+        # break /anidex entirely — fall back to the literal text.
+        text = Config.START_MSG
     keyboard = InlineKeyboardMarkup([[_webapp_button()]])
     if Config.BANNER_IMAGE_URL:
         await update.message.reply_photo(Config.BANNER_IMAGE_URL, caption=text,
@@ -172,6 +175,13 @@ async def cmd_delpost(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     data = q.data or ""
+
+    # Title text can itself contain colons (e.g. "Attack on Titan: Final
+    # Season"), so this one is checked before the generic colon-split below.
+    if data.startswith("reqtext:"):
+        await handle_reqtext(q, data[len("reqtext:"):])
+        return
+
     parts = data.split(":")
     action = parts[0]
 
@@ -199,6 +209,16 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "delpick":
         _, sid, idx = parts
         await handle_delpick(q, sid, int(idx))
+        return
+
+    if action == "searchpick":
+        _, sid, idx = parts
+        await handle_searchpick(q, sid, int(idx))
+        return
+
+    if action == "discoverpick":
+        _, sid, idx = parts
+        await handle_discoverpick(q, sid, int(idx))
         return
 
     if action == "req":
@@ -301,6 +321,125 @@ async def handle_delpick(q, sid, idx):
     await q.edit_message_text(f"\U0001f5d1 Deleted: {match['title']}")
 
 
+# --- Auto-search: plain text messages (no command) search the library ----
+
+def _anime_card_text_and_keyboard(anime: dict):
+    genres = " | ".join(anime.get("genres") or [])
+    lines = [f"*{anime['title']}*"]
+    if genres:
+        lines.append(genres)
+    if anime.get("rating"):
+        lines.append(f"\u2b50 {anime['rating']}")
+    if anime.get("description"):
+        desc = anime["description"]
+        lines.append(desc[:400] + ("\u2026" if len(desc) > 400 else ""))
+    text = "\n\n".join(lines)
+
+    if anime.get("join_link"):
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("\u25b6 Join", url=anime["join_link"])]])
+    else:
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton(
+            "Request Anime", callback_data=f"reqtext:{anime['title'][:200]}")]])
+    return text, keyboard
+
+
+def _display_name_from_user(tg_user) -> str:
+    if tg_user.username:
+        return f"@{tg_user.username}"
+    return tg_user.full_name or str(tg_user.id)
+
+
+async def on_text_search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Any plain-text message (not a command) is treated as an anime title
+    search — first against the local library, then against AniList if
+    nothing local matches, so there's always a useful result or a way to
+    request the title."""
+    text = (update.message.text or "").strip()
+    if len(text) < 2:
+        return
+
+    local_matches = await asyncio.to_thread(db.search_local, text)
+    if local_matches:
+        if len(local_matches) == 1:
+            text_out, keyboard = _anime_card_text_and_keyboard(local_matches[0])
+            await update.message.reply_text(text_out, reply_markup=keyboard, parse_mode="Markdown")
+        else:
+            sid = new_session(kind="searchpick", matches=local_matches[:8])
+            rows = [[InlineKeyboardButton(m["title"], callback_data=f"searchpick:{sid}:{i}")]
+                    for i, m in enumerate(local_matches[:8])]
+            rows.append([InlineKeyboardButton("Cancel", callback_data=f"cancel:{sid}")])
+            await update.message.reply_text(
+                f"Found {len(local_matches)} matches for '{text}':",
+                reply_markup=InlineKeyboardMarkup(rows),
+            )
+        return
+
+    try:
+        data = await asyncio.to_thread(SOURCES["anilist"].search, text, 1)
+    except Exception:
+        data = {"results": []}
+
+    results = data.get("results", [])
+    if not results:
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("Request Anime", callback_data=f"reqtext:{text[:200]}")
+        ]])
+        await update.message.reply_text(f"No results found for '{text}'.", reply_markup=keyboard)
+        return
+
+    sid = new_session(kind="discoverpick", query=text, results=results)
+    rows = [
+        [InlineKeyboardButton(
+            r["title"] + (f" ({r['year']})" if r.get("year") else ""),
+            callback_data=f"discoverpick:{sid}:{i}",
+        )]
+        for i, r in enumerate(results)
+    ]
+    rows.append([InlineKeyboardButton("Cancel", callback_data=f"cancel:{sid}")])
+    await update.message.reply_text(
+        f"'{text}' isn't posted yet — did you mean one of these?",
+        reply_markup=InlineKeyboardMarkup(rows),
+    )
+
+
+async def handle_searchpick(q, sid, idx):
+    session = SESSIONS.get(sid)
+    if not session:
+        await q.answer("Session expired — search again.", show_alert=True)
+        return
+    match = session["matches"][idx]
+    SESSIONS.pop(sid, None)
+    await q.answer()
+    text, keyboard = _anime_card_text_and_keyboard(match)
+    await q.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
+
+async def handle_discoverpick(q, sid, idx):
+    session = SESSIONS.get(sid)
+    if not session:
+        await q.answer("Session expired — search again.", show_alert=True)
+        return
+    await q.answer("Fetching details...")
+    r = session["results"][idx]
+    SESSIONS.pop(sid, None)
+    try:
+        details = await asyncio.to_thread(SOURCES["anilist"].get_details, r["source_id"])
+    except Exception:
+        await q.edit_message_text("Couldn't fetch details for that title. Try again.")
+        return
+    text, keyboard = _anime_card_text_and_keyboard(details)
+    await q.edit_message_text(text, reply_markup=keyboard, parse_mode="Markdown")
+
+
+async def handle_reqtext(q, title: str):
+    requester_name = _display_name_from_user(q.from_user)
+    req_id = db.create_request(title, q.from_user.id, requester_name)
+    notify_new_request(req_id, title, requester_name)
+    await q.answer("Request sent")
+    await q.edit_message_reply_markup(reply_markup=None)
+    await q.message.reply_text(f"\U0001f4ec Request sent for '{title}' — you'll be notified once it's added.")
+
+
 async def handle_request_decision(q, req_id, decision):
     req = db.get_request(req_id)
     if not req:
@@ -388,6 +527,49 @@ def is_admin(user: dict | None) -> bool:
     return bool(user) and user.get("id") in Config.ADMIN_IDS
 
 
+# A Telegram public username: 5-32 chars, must start with a letter, only
+# letters/digits/underscores after that (Telegram's own username rules).
+USERNAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{4,31}$")
+
+
+def normalize_join_link(raw: str) -> str:
+    """Turn whatever an admin pastes — a bare @username, a bare username, a
+    t.me/... link missing its scheme, or a full URL — into a URL that's
+    actually safe to open. Raises ValueError with a user-facing message on
+    anything that can't be turned into an openable link.
+
+    This is the fix for "Set Join Link" silently failing: previously the
+    raw input was stored as-is, so an admin pasting "@my_channel" (instead
+    of a full https://t.me/my_channel URL) saved a string that Telegram's
+    web_app openLink() call can't open, and the Join button just did
+    nothing with no error shown anywhere.
+    """
+    raw = (raw or "").strip()
+    if not raw:
+        return ""  # clearing the link is always allowed
+
+    if raw.startswith("http://") or raw.startswith("https://"):
+        if "t.me/" not in raw and "telegram.me/" not in raw:
+            raise ValueError("That doesn't look like a Telegram link.")
+        return raw
+
+    if raw.startswith("t.me/") or raw.startswith("telegram.me/"):
+        return "https://" + raw
+
+    if re.fullmatch(r"-?\d+", raw):
+        raise ValueError(
+            "A numeric channel ID can't be opened directly — paste the "
+            "channel's invite link (https://t.me/+...) or its @username instead."
+        )
+
+    username = raw[1:] if raw.startswith("@") else raw
+    if not USERNAME_RE.match(username):
+        raise ValueError(
+            "Enter a Telegram @username, a t.me/ link, or an invite link (https://t.me/+...)."
+        )
+    return f"https://t.me/{username}"
+
+
 # ---------------------------------------------------------------------------
 # Web app + JSON API
 # ---------------------------------------------------------------------------
@@ -416,6 +598,17 @@ def api_popular():
         return jsonify(SOURCES["anilist"].get_popular())
     except requests.RequestException:
         return jsonify([])
+
+
+@app.get("/api/news/spotlight")
+def api_news_spotlight():
+    """The single most recent anime news story, for the News tab's
+    #1 Spotlight card. Returns null if the feed is unreachable, so the
+    frontend just hides the section rather than showing broken content."""
+    try:
+        return jsonify(news_plugin.get_spotlight())
+    except requests.RequestException:
+        return jsonify(None)
 
 
 @app.get("/api/catalog/available")
@@ -496,9 +689,13 @@ def api_edit_link(anime_id):
     if not is_admin(user):
         abort(403)
     payload = request.get_json(force=True, silent=True) or {}
-    link = (payload.get("link") or "").strip()
+    raw_link = (payload.get("link") or "").strip()
     if not db.get_anime(anime_id):
         abort(404)
+    try:
+        link = normalize_join_link(raw_link)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
     db.update_link(anime_id, link)
     return jsonify(status="updated", link=link)
 
@@ -536,6 +733,7 @@ def build_bot_app() -> Application | None:
     application.add_handler(CommandHandler("addpost", cmd_addpost))
     application.add_handler(CommandHandler("delpost", cmd_delpost))
     application.add_handler(CallbackQueryHandler(on_callback))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text_search))
     return application
 
 

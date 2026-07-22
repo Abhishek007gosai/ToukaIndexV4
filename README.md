@@ -12,19 +12,27 @@ bot runs in the same process via a Telegram webhook.
   — then sends a follow-up message prompting you to set its join link.
 - **`/delpost <name>`** — admin-only. Deletes a matching post (or lets you
   choose which one, if several match).
+- **Auto-search** — send the bot any plain text (not a command) and it
+  searches your posted library first, then AniList if nothing local
+  matches, replying with a card (and a Join or Request Anime button) right
+  in the chat.
 - **Mini app** — tabs are **Available** (your posted catalog, browsable
-  A–Z) and **News** (Trending Now + Popular, live from AniList, discovery
-  only — no request/join actions there).
+  A–Z) and **News** (a #1 Spotlight story from Anime News Network, plus
+  Trending Now + Popular live from AniList — discovery only, no
+  request/join/report actions there).
 - **Request Anime / Join** — an Available post shows Request Anime until
   you set a join link, then shows Join instead. Requests notify your log
   channel with Accept / Cancel buttons.
-- **Report an issue** — preset reasons + optional 50-character note, sent
-  to your log channel.
+- **Report an issue** — Available posts only (not News/Spotlight). Preset
+  reasons + optional 50-character note, sent to your log channel.
 - **Profile** — Telegram ID, registration status, role, access, verified
   via Telegram's WebApp `initData` signature.
 - **Admin ➕ link editor** — a ➕ button next to Join/Request (admin/owner
-  only) opens a "Set Join Link" sheet to paste a channel ID, @username, or
-  URL — no need to re-run `/addpost`.
+  only) opens a "Set Join Link" sheet accepting a channel ID, @username, or
+  URL — the input is validated and normalized into an openable
+  `https://t.me/...` link server-side before saving, with a clear error
+  message if it can't be turned into one (e.g. a bare numeric channel ID).
+- Post details open as a small centered card, not a full-screen page.
 
 ## 1. Create the bot
 
